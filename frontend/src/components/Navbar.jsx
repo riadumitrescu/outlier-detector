@@ -1,8 +1,8 @@
 import { Link, useLocation } from 'react-router-dom'
 import { LayoutDashboard, Bookmark, Tag, Radio, RefreshCw, Download, TrendingUp } from 'lucide-react'
-import { triggerRefresh, getRefreshStatus, getExportUrl } from '../api/client'
+import { triggerRefresh, getRefreshStatus, getExportUrl, getKeywords, refreshKeyword } from '../api/client'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import QuotaBar from './QuotaBar'
 
 const NAV = [
@@ -17,33 +17,45 @@ export default function Navbar() {
   const loc = useLocation()
   const qc = useQueryClient()
   const [refreshing, setRefreshing] = useState(false)
-
-  const { data: status } = useQuery({
-    queryKey: ['refresh-status'],
-    queryFn: getRefreshStatus,
-    refetchInterval: refreshing ? 1500 : 10000,
-  })
-
-  useEffect(() => {
-    if (refreshing && status && !status.running) {
-      setRefreshing(false)
-      qc.invalidateQueries()
-    }
-  }, [status, refreshing, qc])
+  const [progressText, setProgressText] = useState(null)
+  const abortRef = useRef(false)
 
   async function handleRefresh() {
     setRefreshing(true)
+    abortRef.current = false
     try {
-      await triggerRefresh(14)
+      // Step-by-step refresh: process one keyword at a time (works on Vercel)
+      const keywords = await getKeywords()
+      const activeKws = keywords.filter(k => k.active)
+      let totalVideos = 0
+      let totalBreakouts = 0
+
+      for (let i = 0; i < activeKws.length; i++) {
+        if (abortRef.current) break
+        const kw = activeKws[i].keyword
+        setProgressText(`Searching ${i + 1}/${activeKws.length}: ${kw}`)
+        try {
+          const result = await refreshKeyword(kw)
+          if (result.ok) {
+            totalVideos += result.videos_processed || 0
+            totalBreakouts += result.breakouts || 0
+          }
+        } catch (err) {
+          console.warn(`Refresh failed for "${kw}":`, err)
+        }
+      }
+
+      setProgressText(`Done — ${totalBreakouts} breakouts from ${totalVideos} videos`)
+      qc.invalidateQueries()
+      setTimeout(() => setProgressText(null), 4000)
     } catch {
+      setProgressText(null)
+    } finally {
       setRefreshing(false)
     }
   }
 
-  const isRunning = status?.running || refreshing
-  const progressText = isRunning && status?.progress
-    ? status.progress.length > 50 ? status.progress.slice(0, 50) + '...' : status.progress
-    : null
+  const isRunning = refreshing
 
   return (
     <header className="sticky top-0 z-50 bg-white/95 backdrop-blur-sm border-b border-[#F0F0F0]">

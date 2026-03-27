@@ -175,6 +175,55 @@ async def trigger_refresh(
     return {"ok": True, "message": "Refresh started"}
 
 
+@app.post("/api/refresh-keyword")
+def refresh_single_keyword(keyword: str, days_back: int = 14):
+    """Synchronously refresh a single keyword. Works in serverless (Vercel)."""
+    try:
+        ids = yt.search_videos(keyword, days_back=days_back)
+        if not ids:
+            return {"ok": True, "keyword": keyword, "videos_processed": 0, "breakouts": 0}
+
+        videos = yt.fetch_video_details(ids)
+        breakouts = 0
+
+        for v in videos:
+            text = (v["title"] + " " + v.get("description", "")).lower()
+            if keyword.lower() in text:
+                v["keywords_matched"] = [keyword]
+            else:
+                v["keywords_matched"] = [keyword]
+
+            channel_id = v["channel_id"]
+            try:
+                ch_data = yt.get_channel_data(channel_id, v.get("channel_name", ""))
+            except Exception:
+                ch_data = {"subscriber_count": 0, "avg_views": 0.0}
+
+            score_data = ol.compute_outlier_score(
+                v["view_count"],
+                ch_data.get("subscriber_count", 0),
+                ch_data.get("avg_views", 0.0),
+                published_at=v.get("published_at"),
+                like_count=v.get("like_count", 0),
+                comment_count=v.get("comment_count", 0),
+            )
+
+            db.upsert_video(v)
+            db.upsert_outlier_score(
+                v["video_id"],
+                score_data["view_to_sub_ratio"],
+                score_data["view_to_average_ratio"],
+                score_data["outlier_score"],
+                score_data["is_breakout"],
+            )
+            if score_data["is_breakout"]:
+                breakouts += 1
+
+        return {"ok": True, "keyword": keyword, "videos_processed": len(videos), "breakouts": breakouts}
+    except Exception as e:
+        return {"ok": False, "keyword": keyword, "error": str(e)}
+
+
 @app.get("/api/refresh/status")
 def refresh_status():
     return _refresh_status

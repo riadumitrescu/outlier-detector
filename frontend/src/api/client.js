@@ -17,6 +17,8 @@ export const getDashboard = () => api.get('/dashboard').then(r => r.data)
 export const triggerRefresh = (daysBack = 14, keywords = null) =>
   api.post('/refresh', null, { params: { days_back: daysBack, keywords } }).then(r => r.data)
 export const getRefreshStatus = () => api.get('/refresh/status').then(r => r.data)
+export const refreshKeyword = (keyword, daysBack = 14) =>
+  api.post('/refresh-keyword', null, { params: { keyword, days_back: daysBack }, timeout: 30000 }).then(r => r.data)
 
 // Videos (with filtering)
 export const getVideos = (params = {}) =>
