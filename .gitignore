@@ -6,3 +6,5 @@ node_modules/
 frontend/dist/
 frontend/.env
 .DS_Store
+.vercel
+.env*.local

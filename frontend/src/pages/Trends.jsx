@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { getTikTokTrends, scanTikTokTrends, getAllTrends, getRefreshStatus } from '../api/client'
-import { useState, useEffect } from 'react'
+import { getTikTokTrends, scanTikTokKeyword, getAllTrends, getRefreshStatus, getKeywords } from '../api/client'
+import { useState, useEffect, useRef } from 'react'
 import {
   TrendingUp, TrendingDown, Minus, Zap, Clock, Search,
   RefreshCw, ArrowRight, Sparkles, ExternalLink, ChevronDown, ChevronUp
@@ -199,24 +199,33 @@ export default function Trends() {
     queryFn: getAllTrends,
   })
 
-  const { data: status } = useQuery({
-    queryKey: ['refresh-status'],
-    queryFn: getRefreshStatus,
-    refetchInterval: scanning ? 2000 : false,
-  })
-
-  useEffect(() => {
-    if (scanning && status && !status.running) {
-      setScanning(false)
-      qc.invalidateQueries({ queryKey: ['tiktok-trends'] })
-    }
-  }, [status, scanning, qc])
+  const [scanProgress, setScanProgress] = useState(null)
+  const abortRef = useRef(false)
 
   async function handleScan() {
     setScanning(true)
+    abortRef.current = false
     try {
-      await scanTikTokTrends()
+      const keywords = await getKeywords()
+      const activeKws = keywords.filter(k => k.active)
+
+      for (let i = 0; i < activeKws.length; i++) {
+        if (abortRef.current) break
+        const kw = activeKws[i].keyword
+        setScanProgress(`Scanning ${i + 1}/${activeKws.length}: ${kw}`)
+        try {
+          await scanTikTokKeyword(kw)
+        } catch (err) {
+          console.warn(`TikTok scan failed for "${kw}":`, err)
+        }
+      }
+
+      setScanProgress(`Done — ${activeKws.length} keywords scanned`)
+      qc.invalidateQueries({ queryKey: ['tiktok-trends'] })
+      setTimeout(() => setScanProgress(null), 4000)
     } catch {
+      setScanProgress(null)
+    } finally {
       setScanning(false)
     }
   }
@@ -268,10 +277,10 @@ export default function Trends() {
       </div>
 
       {/* Progress bar */}
-      {isRunning && status?.progress && (
+      {scanProgress && (
         <div className="mb-6 p-3 bg-[#FAFAFA] rounded-xl flex items-center gap-3">
           <div className="w-2 h-2 rounded-full bg-[#C9A962] animate-pulse" />
-          <span className="text-[12px] text-[#6B7280] font-medium">{status.progress}</span>
+          <span className="text-[12px] text-[#6B7280] font-medium">{scanProgress}</span>
         </div>
       )}
 

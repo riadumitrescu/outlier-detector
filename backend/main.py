@@ -181,17 +181,14 @@ def refresh_single_keyword(keyword: str, days_back: int = 14):
     try:
         ids = yt.search_videos(keyword, days_back=days_back)
         if not ids:
-            return {"ok": True, "keyword": keyword, "videos_processed": 0, "breakouts": 0}
+            return {"ok": True, "keyword": keyword, "videos_processed": 0, "breakouts": 0,
+                    "debug": {"search_ids": 0, "api_key_set": bool(os.getenv("YOUTUBE_API_KEY"))}}
 
         videos = yt.fetch_video_details(ids)
         breakouts = 0
 
         for v in videos:
-            text = (v["title"] + " " + v.get("description", "")).lower()
-            if keyword.lower() in text:
-                v["keywords_matched"] = [keyword]
-            else:
-                v["keywords_matched"] = [keyword]
+            v["keywords_matched"] = [keyword]
 
             channel_id = v["channel_id"]
             try:
@@ -219,9 +216,11 @@ def refresh_single_keyword(keyword: str, days_back: int = 14):
             if score_data["is_breakout"]:
                 breakouts += 1
 
-        return {"ok": True, "keyword": keyword, "videos_processed": len(videos), "breakouts": breakouts}
+        return {"ok": True, "keyword": keyword, "videos_processed": len(videos), "breakouts": breakouts,
+                "debug": {"search_ids": len(ids), "after_filter": len(videos)}}
     except Exception as e:
-        return {"ok": False, "keyword": keyword, "error": str(e)}
+        import traceback
+        return {"ok": False, "keyword": keyword, "error": str(e), "trace": traceback.format_exc()}
 
 
 @app.get("/api/refresh/status")
@@ -386,11 +385,22 @@ def get_tiktok_trend(keyword: str):
 
 @app.post("/api/tiktok-trends/scan")
 async def scan_tiktok_trends(background_tasks: BackgroundTasks):
-    """Scan all active keywords for TikTok trends (background)."""
+    """Scan all active keywords for TikTok trends (background). Falls back OK on Vercel."""
     if _refresh_status["running"]:
         return {"ok": False, "message": "A scan is already running"}
     background_tasks.add_task(run_tiktok_scan)
     return {"ok": True, "message": "TikTok trend scan started"}
+
+
+@app.post("/api/tiktok-trends/scan-keyword")
+def scan_tiktok_keyword(keyword: str):
+    """Synchronously scan a single keyword for TikTok trends. Works on Vercel."""
+    try:
+        result = tt.scan_niche_trends([keyword])
+        data = result.get(keyword, {})
+        return {"ok": True, "keyword": keyword, "data": data}
+    except Exception as e:
+        return {"ok": False, "keyword": keyword, "error": str(e)}
 
 
 async def run_tiktok_scan():

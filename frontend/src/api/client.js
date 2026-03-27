@@ -69,5 +69,7 @@ export const getAllTrends = () => api.get('/trends').then(r => r.data)
 export const getTikTokTrends = () => api.get('/tiktok-trends').then(r => r.data)
 export const getTikTokTrend = (keyword) => api.get(`/tiktok-trends/${encodeURIComponent(keyword)}`).then(r => r.data)
 export const scanTikTokTrends = () => api.post('/tiktok-trends/scan').then(r => r.data)
+export const scanTikTokKeyword = (keyword) =>
+  api.post('/tiktok-trends/scan-keyword', null, { params: { keyword }, timeout: 30000 }).then(r => r.data)
 
 export default api
