@@ -181,8 +181,17 @@ def refresh_single_keyword(keyword: str, days_back: int = 14):
     try:
         ids = yt.search_videos(keyword, days_back=days_back)
         if not ids:
-            return {"ok": True, "keyword": keyword, "videos_processed": 0, "breakouts": 0,
-                    "debug": {"search_ids": 0, "api_key_set": bool(os.getenv("YOUTUBE_API_KEY"))}}
+            # Try a direct API test to surface the real error
+            debug = {"search_ids": 0, "api_key_set": bool(os.getenv("YOUTUBE_API_KEY")),
+                     "api_key_prefix": (os.getenv("YOUTUBE_API_KEY") or "")[:8] + "..."}
+            try:
+                client = yt.get_client()
+                test = client.search().list(part="id", q=keyword, type="video", maxResults=1).execute()
+                debug["test_results"] = len(test.get("items", []))
+                debug["test_ok"] = True
+            except Exception as te:
+                debug["test_error"] = str(te)
+            return {"ok": True, "keyword": keyword, "videos_processed": 0, "breakouts": 0, "debug": debug}
 
         videos = yt.fetch_video_details(ids)
         breakouts = 0
