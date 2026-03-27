@@ -181,17 +181,7 @@ def refresh_single_keyword(keyword: str, days_back: int = 14):
     try:
         ids = yt.search_videos(keyword, days_back=days_back)
         if not ids:
-            # Try a direct API test to surface the real error
-            debug = {"search_ids": 0, "api_key_set": bool(os.getenv("YOUTUBE_API_KEY")),
-                     "api_key_prefix": (os.getenv("YOUTUBE_API_KEY") or "")[:8] + "..."}
-            try:
-                client = yt.get_client()
-                test = client.search().list(part="id", q=keyword, type="video", maxResults=1).execute()
-                debug["test_results"] = len(test.get("items", []))
-                debug["test_ok"] = True
-            except Exception as te:
-                debug["test_error"] = str(te)
-            return {"ok": True, "keyword": keyword, "videos_processed": 0, "breakouts": 0, "debug": debug}
+            return {"ok": True, "keyword": keyword, "videos_processed": 0, "breakouts": 0}
 
         videos = yt.fetch_video_details(ids)
         breakouts = 0
@@ -225,8 +215,7 @@ def refresh_single_keyword(keyword: str, days_back: int = 14):
             if score_data["is_breakout"]:
                 breakouts += 1
 
-        return {"ok": True, "keyword": keyword, "videos_processed": len(videos), "breakouts": breakouts,
-                "debug": {"search_ids": len(ids), "after_filter": len(videos)}}
+        return {"ok": True, "keyword": keyword, "videos_processed": len(videos), "breakouts": breakouts}
     except Exception as e:
         import traceback
         return {"ok": False, "keyword": keyword, "error": str(e), "trace": traceback.format_exc()}

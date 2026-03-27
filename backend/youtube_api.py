@@ -52,16 +52,48 @@ def _get_language(snippet: dict) -> str | None:
     return lang.split("-")[0].lower() if lang else None
 
 _youtube = None
+_current_key_index = 0
+
+
+def _get_api_keys() -> list[str]:
+    """Collect all available YouTube API keys."""
+    keys = []
+    primary = os.getenv("YOUTUBE_API_KEY")
+    if primary:
+        keys.append(primary)
+    secondary = os.getenv("YOUTUBE_API_KEY_2")
+    if secondary:
+        keys.append(secondary)
+    # Support KEY_3, KEY_4, etc. if ever added
+    for i in range(3, 10):
+        k = os.getenv(f"YOUTUBE_API_KEY_{i}")
+        if k:
+            keys.append(k)
+    return keys
 
 
 def get_client():
-    global _youtube
+    """Get YouTube API client, auto-rotating keys on quota errors."""
+    global _youtube, _current_key_index
+    keys = _get_api_keys()
+    if not keys:
+        raise RuntimeError("No YOUTUBE_API_KEY set")
     if _youtube is None:
-        api_key = os.getenv("YOUTUBE_API_KEY")
-        if not api_key:
-            raise RuntimeError("YOUTUBE_API_KEY not set")
-        _youtube = build("youtube", "v3", developerKey=api_key)
+        _current_key_index = 0
+        _youtube = build("youtube", "v3", developerKey=keys[_current_key_index])
     return _youtube
+
+
+def _rotate_key():
+    """Switch to the next API key after quota exhaustion."""
+    global _youtube, _current_key_index
+    keys = _get_api_keys()
+    _current_key_index += 1
+    if _current_key_index >= len(keys):
+        return False  # no more keys
+    print(f"[YouTube] Rotating to API key {_current_key_index + 1}/{len(keys)}")
+    _youtube = build("youtube", "v3", developerKey=keys[_current_key_index])
+    return True
 
 
 def _parse_duration(iso_duration: str) -> int:
@@ -79,25 +111,11 @@ def _best_thumbnail(thumbnails: dict) -> str:
     return ""
 
 
-QUOTA_CAP = 3000  # stop refreshing if we've used this much today
+QUOTA_CAP = 5000  # per-key cap — rotate to next key after this
 
 
-def search_videos(keyword: str, days_back: int = 14, max_results: int = 15) -> list[str]:
-    """
-    Search for videos matching keyword published in the last `days_back` days.
-    Returns list of video IDs. Costs 100 quota units per duration bucket.
-    max_results capped at 15 to save quota.
-    """
-    # Check quota cap before searching
-    quota = db.get_quota_used()
-    if quota["units_used"] >= QUOTA_CAP:
-        print(f"[YouTube] Quota cap reached ({quota['units_used']}/{QUOTA_CAP}), skipping search for '{keyword}'")
-        return []
-
-    published_after = (
-        datetime.now(timezone.utc) - timedelta(days=days_back)
-    ).strftime("%Y-%m-%dT%H:%M:%SZ")
-
+def _search_with_retry(keyword: str, published_after: str, duration: str, max_results: int) -> list[str]:
+    """Execute a single search, auto-rotating API keys on quota errors."""
     yt = get_client()
     try:
         resp = yt.search().list(
@@ -105,37 +123,35 @@ def search_videos(keyword: str, days_back: int = 14, max_results: int = 15) -> l
             q=keyword,
             type="video",
             publishedAfter=published_after,
-            videoDuration="medium",   # 4-20 minutes
+            videoDuration=duration,
             maxResults=max_results,
             order="viewCount",
             relevanceLanguage="en",
         ).execute()
         db.log_quota(100)
+        return [item["id"]["videoId"] for item in resp.get("items", [])]
     except HttpError as e:
-        print(f"[YouTube] search error for '{keyword}': {e}")
+        if "quotaExceeded" in str(e):
+            if _rotate_key():
+                # Retry with new key
+                return _search_with_retry(keyword, published_after, duration, max_results)
+            print(f"[YouTube] All API keys exhausted")
+        else:
+            print(f"[YouTube] search error for '{keyword}': {e}")
         return []
 
-    ids = [item["id"]["videoId"] for item in resp.get("items", [])]
 
-    # Also search for "long" videos (>20 min) — only if quota allows
-    quota = db.get_quota_used()
-    if quota["units_used"] < QUOTA_CAP:
-        try:
-            resp2 = yt.search().list(
-                part="id",
-                q=keyword,
-                type="video",
-                publishedAfter=published_after,
-                videoDuration="long",
-                maxResults=max_results,
-                order="viewCount",
-                relevanceLanguage="en",
-            ).execute()
-            db.log_quota(100)
-            ids += [item["id"]["videoId"] for item in resp2.get("items", [])]
-        except HttpError as e:
-            print(f"[YouTube] search (long) error for '{keyword}': {e}")
+def search_videos(keyword: str, days_back: int = 14, max_results: int = 10) -> list[str]:
+    """
+    Search for videos matching keyword published in the last `days_back` days.
+    Returns list of video IDs. Costs 100 quota units (one search, medium duration only).
+    """
+    published_after = (
+        datetime.now(timezone.utc) - timedelta(days=days_back)
+    ).strftime("%Y-%m-%dT%H:%M:%SZ")
 
+    # Single search for medium-length videos (4-20 min) — saves 100 units vs dual search
+    ids = _search_with_retry(keyword, published_after, "medium", max_results)
     return list(set(ids))
 
 
@@ -149,19 +165,27 @@ def fetch_video_details(video_ids: list[str]) -> list[dict]:
         return []
 
     results = []
-    yt = get_client()
 
     for i in range(0, len(video_ids), 50):
         batch = video_ids[i:i+50]
         try:
+            yt = get_client()
             resp = yt.videos().list(
                 part="snippet,statistics,contentDetails",
                 id=",".join(batch),
             ).execute()
             db.log_quota(1)
         except HttpError as e:
-            print(f"[YouTube] videos.list error: {e}")
-            continue
+            if "quotaExceeded" in str(e) and _rotate_key():
+                try:
+                    yt = get_client()
+                    resp = yt.videos().list(part="snippet,statistics,contentDetails", id=",".join(batch)).execute()
+                    db.log_quota(1)
+                except HttpError:
+                    continue
+            else:
+                print(f"[YouTube] videos.list error: {e}")
+                continue
 
         for item in resp.get("items", []):
             snippet = item.get("snippet", {})
