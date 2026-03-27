@@ -3,7 +3,11 @@ import json
 from datetime import datetime, timedelta
 from pathlib import Path
 
-DB_PATH = Path(__file__).parent / "data.db"
+import os as _os
+if _os.environ.get("VERCEL"):
+    DB_PATH = Path("/tmp/data.db")
+else:
+    DB_PATH = Path(__file__).parent / "data.db"
 
 
 def get_conn():
