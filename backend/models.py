@@ -14,6 +14,12 @@ class UpdateNotesRequest(BaseModel):
     notes: str
 
 
+class TrackChannelRequest(BaseModel):
+    channel_id: str
+    channel_name: str = ""
+    why: str = ""
+
+
 class VideoSummary(BaseModel):
     video_id: str
     title: str

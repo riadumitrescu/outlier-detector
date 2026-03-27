@@ -1,12 +1,12 @@
 import { useParams, Link } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { getVideo, getTranscript, saveVideo, unsaveVideo, updateNotes } from '../api/client'
+import { getVideo, getTranscript, saveVideo, unsaveVideo, updateNotes, trackChannel, isChannelTracked } from '../api/client'
 import { useState, useEffect } from 'react'
 import {
   ArrowLeft, BookmarkPlus, BookmarkCheck, ExternalLink,
   Eye, ThumbsUp, MessageSquare, Users, TrendingUp, Clock,
   ChevronDown, ChevronUp, Zap, FileText, Hash, Lightbulb,
-  Target, BarChart2, Sparkles, Copy, Check
+  Target, BarChart2, Sparkles, Copy, Check, Radio
 } from 'lucide-react'
 
 function fmtNum(n) {
@@ -92,6 +92,8 @@ export default function VideoDetail() {
   const [notesSaved, setNotesSaved] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(null)
+  const [channelTracked, setChannelTracked] = useState(null)
+  const [trackingChannel, setTrackingChannel] = useState(false)
 
   const { data: video, isLoading, error } = useQuery({
     queryKey: ['video', videoId],
@@ -100,6 +102,9 @@ export default function VideoDetail() {
 
   useEffect(() => {
     if (video?.notes) setNotes(video.notes)
+    if (video?.channel_id) {
+      isChannelTracked(video.channel_id).then(r => setChannelTracked(r.tracked))
+    }
   }, [video])
 
   const { data: transcript, isLoading: transcriptLoading } = useQuery({
@@ -195,18 +200,38 @@ export default function VideoDetail() {
                     <span>{fmtDuration(video.duration_seconds)}</span>
                   </div>
                 </div>
-                <button
-                  onClick={handleSaveToggle}
-                  disabled={saving}
-                  className={`flex items-center gap-2 px-4 py-2 rounded-xl text-[13px] font-semibold transition-all shrink-0 ${
-                    isSaved
-                      ? 'bg-[#C9A962] text-white hover:bg-[#D4BA7A]'
-                      : 'bg-[#FAFAFA] border border-[#F0F0F0] text-[#1A1A1A] hover:bg-gray-100'
-                  }`}
-                >
-                  {isSaved ? <BookmarkCheck size={14} /> : <BookmarkPlus size={14} />}
-                  {isSaved ? 'Saved' : 'Save'}
-                </button>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    onClick={async () => {
+                      setTrackingChannel(true)
+                      try {
+                        await trackChannel(video.channel_id, video.channel_name)
+                        setChannelTracked(true)
+                      } finally { setTrackingChannel(false) }
+                    }}
+                    disabled={trackingChannel || channelTracked}
+                    className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-[12px] font-semibold transition-all ${
+                      channelTracked
+                        ? 'bg-green-50 text-green-700 border border-green-200'
+                        : 'bg-[#FAFAFA] border border-[#F0F0F0] text-[#6B7280] hover:text-[#1A1A1A] hover:bg-gray-100'
+                    }`}
+                  >
+                    <Radio size={12} />
+                    {channelTracked ? 'Tracking' : 'Track Channel'}
+                  </button>
+                  <button
+                    onClick={handleSaveToggle}
+                    disabled={saving}
+                    className={`flex items-center gap-2 px-4 py-2 rounded-xl text-[13px] font-semibold transition-all ${
+                      isSaved
+                        ? 'bg-[#C9A962] text-white hover:bg-[#D4BA7A]'
+                        : 'bg-[#FAFAFA] border border-[#F0F0F0] text-[#1A1A1A] hover:bg-gray-100'
+                    }`}
+                  >
+                    {isSaved ? <BookmarkCheck size={14} /> : <BookmarkPlus size={14} />}
+                    {isSaved ? 'Saved' : 'Save'}
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -290,6 +315,34 @@ export default function VideoDetail() {
               ))}
             </div>
           </Section>
+
+          {/* Niche Format Detection */}
+          {ta.niche_format?.length > 0 && (
+            <div className="bg-white rounded-2xl border-2 border-dashed border-[#C9A962]/40 p-5">
+              <h2 className="font-bold text-[14px] text-[#1A1A1A] flex items-center gap-2 mb-3">
+                <Sparkles size={15} className="text-[#C9A962]" /> Content Format Match
+              </h2>
+              <div className="space-y-2">
+                {ta.niche_format.map(fmt => (
+                  <div key={fmt.id} className="flex items-center gap-3 p-3 rounded-xl" style={{ backgroundColor: fmt.color + '10' }}>
+                    <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: fmt.color }} />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-[13px] font-bold text-[#1A1A1A]">{fmt.label}</span>
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold ${
+                          fmt.confidence === 'strong' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'
+                        }`}>{fmt.confidence}</span>
+                      </div>
+                      <p className="text-[11px] text-[#6B7280] mt-0.5">{fmt.description}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <p className="text-[10px] text-[#6B7280] mt-3 italic">
+                Formats: Identity Hook · Psychological Reframe · Things Nobody Tells You · Cultural Commentary · My Actual System
+              </p>
+            </div>
+          )}
 
           {/* Description */}
           <Section icon={FileText} title="Description" accent="text-blue-500">

@@ -78,18 +78,55 @@ def init_db():
                 direction TEXT,
                 fetched_at TEXT DEFAULT (datetime('now'))
             );
+
+            CREATE TABLE IF NOT EXISTS tracked_channels (
+                channel_id TEXT PRIMARY KEY,
+                channel_name TEXT,
+                subscriber_count INTEGER DEFAULT 0,
+                avg_views REAL DEFAULT 0,
+                why_tracked TEXT DEFAULT '',
+                tracked_at TEXT DEFAULT (datetime('now')),
+                last_scanned TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS tiktok_trends_cache (
+                keyword TEXT PRIMARY KEY,
+                suggestions TEXT,
+                hashtag_views INTEGER,
+                platform_comparison TEXT,
+                opportunity_score TEXT,
+                fetched_at TEXT DEFAULT (datetime('now'))
+            );
         """)
-        # Seed default keywords — psychology, intentional living, cultural commentary
+        # Seed default keywords — aligned with psych/identity/cultural commentary niche
         defaults = [
-            "psychology reframe", "emotional patterns",
-            "deleted social media", "phone addiction", "digital detox",
-            "slow living", "analog lifestyle", "journaling routine",
-            "therapist explains", "dangerous mindset",
-            "brain rot", "feeling sharp again",
-            "convenience culture", "creative impulses",
-            "therapy speak", "log off social media",
-            "discipline vs love", "self improvement trap",
-            "intentional living", "overthinking",
+            # Psychology / mental health (proven search volume)
+            "self compassion vs self discipline", "attachment theory explained",
+            "emotional regulation tips", "signs of burnout",
+            "nervous system regulation", "shadow work for beginners",
+            "overthinking", "mental health",
+            # Language / identity (unique angle)
+            "how I learned English", "language learning tips",
+            "speaking multiple languages", "growing up bilingual",
+            # Study / academic
+            "weekly review system", "how to study effectively",
+            "personal curriculum",
+            # Intentional living / digital
+            "digital minimalism", "phone addiction",
+            "intentional living tips", "slow living",
+            # Relationships / identity
+            "relationships across cultures", "asexuality explained",
+            # Journaling
+            "journaling for beginners", "journaling prompts",
+            "how to start journaling",
+            # Cultural commentary
+            "brain rot", "hustle culture", "self improvement trap",
+            "loneliness epidemic", "parasocial relationships",
+            "chronically online", "main character syndrome",
+            # Trending / high-signal
+            "somatic exercises", "nervous system reset",
+            "emotional immaturity signs", "dopamine detox",
+            "quiet quitting psychology",
         ]
         for kw in defaults:
             conn.execute(
@@ -487,6 +524,54 @@ def export_videos_csv(breakout_only=True):
     return output.getvalue()
 
 
+# ── Tracked Channels ─────────────────────────────────────────────────────
+
+def get_tracked_channels():
+    with get_conn() as conn:
+        rows = conn.execute("""
+            SELECT tc.*, c.subscriber_count as current_subs, c.avg_views as current_avg
+            FROM tracked_channels tc
+            LEFT JOIN channels c ON tc.channel_id = c.channel_id
+            ORDER BY tc.tracked_at DESC
+        """).fetchall()
+        return [dict(r) for r in rows]
+
+
+def track_channel(channel_id: str, channel_name: str, subscriber_count: int = 0, avg_views: float = 0, why: str = ""):
+    with get_conn() as conn:
+        conn.execute("""
+            INSERT INTO tracked_channels (channel_id, channel_name, subscriber_count, avg_views, why_tracked)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(channel_id) DO UPDATE SET
+                channel_name=excluded.channel_name,
+                subscriber_count=excluded.subscriber_count,
+                avg_views=excluded.avg_views,
+                why_tracked=CASE WHEN excluded.why_tracked != '' THEN excluded.why_tracked ELSE tracked_channels.why_tracked END
+        """, (channel_id, channel_name, subscriber_count, avg_views, why))
+        conn.commit()
+
+
+def untrack_channel(channel_id: str):
+    with get_conn() as conn:
+        conn.execute("DELETE FROM tracked_channels WHERE channel_id=?", (channel_id,))
+        conn.commit()
+
+
+def is_channel_tracked(channel_id: str) -> bool:
+    with get_conn() as conn:
+        row = conn.execute("SELECT 1 FROM tracked_channels WHERE channel_id=?", (channel_id,)).fetchone()
+        return row is not None
+
+
+def update_channel_scan_time(channel_id: str):
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE tracked_channels SET last_scanned=datetime('now') WHERE channel_id=?",
+            (channel_id,)
+        )
+        conn.commit()
+
+
 # ── Quota Tracking ────────────────────────────────────────────────────────────
 
 def log_quota(units: int):
@@ -551,3 +636,64 @@ def upsert_trend(keyword: str, trend_data: list, direction: str):
                 fetched_at=excluded.fetched_at
         """, (keyword, json.dumps(trend_data), direction))
         conn.commit()
+
+
+# ── TikTok Trends Cache ──────────────────────────────────────────────────────
+
+def get_cached_tiktok_trend(keyword: str):
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM tiktok_trends_cache WHERE keyword=?", (keyword,)
+        ).fetchone()
+        if not row:
+            return None
+        fetched = datetime.fromisoformat(row["fetched_at"])
+        if datetime.utcnow() - fetched > timedelta(hours=6):
+            return None
+        data = dict(row)
+        for field in ["suggestions", "platform_comparison", "opportunity_score"]:
+            if data.get(field):
+                try:
+                    data[field] = json.loads(data[field])
+                except Exception:
+                    pass
+        return data
+
+
+def upsert_tiktok_trend(keyword: str, result: dict):
+    with get_conn() as conn:
+        conn.execute("""
+            INSERT INTO tiktok_trends_cache (keyword, suggestions, hashtag_views, platform_comparison, opportunity_score, fetched_at)
+            VALUES (?, ?, ?, ?, ?, datetime('now'))
+            ON CONFLICT(keyword) DO UPDATE SET
+                suggestions=excluded.suggestions,
+                hashtag_views=excluded.hashtag_views,
+                platform_comparison=excluded.platform_comparison,
+                opportunity_score=excluded.opportunity_score,
+                fetched_at=excluded.fetched_at
+        """, (
+            keyword,
+            json.dumps(result.get("suggestions", [])),
+            result.get("hashtag_views"),
+            json.dumps(result.get("platform_comparison", {})),
+            json.dumps(result.get("opportunity_score", {})),
+        ))
+        conn.commit()
+
+
+def get_all_tiktok_trends():
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM tiktok_trends_cache ORDER BY fetched_at DESC"
+        ).fetchall()
+        results = []
+        for row in rows:
+            data = dict(row)
+            for field in ["suggestions", "platform_comparison", "opportunity_score"]:
+                if data.get(field):
+                    try:
+                        data[field] = json.loads(data[field])
+                    except Exception:
+                        pass
+            results.append(data)
+        return results

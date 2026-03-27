@@ -51,8 +51,21 @@ export const getStats = () => api.get('/stats').then(r => r.data)
 export const getExportUrl = (breakoutOnly = true) =>
   `/api/export/csv?breakout_only=${breakoutOnly}`
 
+// Tracked Channels
+export const getTrackedChannels = () => api.get('/channels').then(r => r.data)
+export const trackChannel = (channelId, channelName = '', why = '') =>
+  api.post('/channels/track', { channel_id: channelId, channel_name: channelName, why }).then(r => r.data)
+export const untrackChannel = (channelId) => api.delete(`/channels/${channelId}`).then(r => r.data)
+export const isChannelTracked = (channelId) => api.get(`/channels/${channelId}/is-tracked`).then(r => r.data)
+export const scanChannels = () => api.post('/channels/scan').then(r => r.data)
+
 // Trends
 export const getTrend = (keyword) => api.get(`/trends/${encodeURIComponent(keyword)}`).then(r => r.data)
 export const getAllTrends = () => api.get('/trends').then(r => r.data)
+
+// TikTok Trends
+export const getTikTokTrends = () => api.get('/tiktok-trends').then(r => r.data)
+export const getTikTokTrend = (keyword) => api.get(`/tiktok-trends/${encodeURIComponent(keyword)}`).then(r => r.data)
+export const scanTikTokTrends = () => api.post('/tiktok-trends/scan').then(r => r.data)
 
 export default api

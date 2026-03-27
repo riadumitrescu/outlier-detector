@@ -1,5 +1,5 @@
 import { Link, useLocation } from 'react-router-dom'
-import { LayoutDashboard, Bookmark, Tag, RefreshCw, Download } from 'lucide-react'
+import { LayoutDashboard, Bookmark, Tag, Radio, RefreshCw, Download, TrendingUp } from 'lucide-react'
 import { triggerRefresh, getRefreshStatus, getExportUrl } from '../api/client'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState, useEffect } from 'react'
@@ -9,6 +9,8 @@ const NAV = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/saved', label: 'Saved', icon: Bookmark },
   { to: '/keywords', label: 'Keywords', icon: Tag },
+  { to: '/channels', label: 'Channels', icon: Radio },
+  { to: '/trends', label: 'Trends', icon: TrendingUp },
 ]
 
 export default function Navbar() {

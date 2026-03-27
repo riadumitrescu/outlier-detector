@@ -12,8 +12,9 @@ import database as db
 import youtube_api as yt
 import transcript as tr
 import trends as tr_mod
+import tiktok_trends as tt
 import outlier as ol
-from models import KeywordAdd, SaveVideoRequest, UpdateNotesRequest
+from models import KeywordAdd, SaveVideoRequest, UpdateNotesRequest, TrackChannelRequest
 
 db.init_db()
 
@@ -229,6 +230,9 @@ async def run_refresh(days_back: int = 14, keyword_filter: list = None):
                 v["view_count"],
                 ch_data.get("subscriber_count", 0),
                 ch_data.get("avg_views", 0.0),
+                published_at=v.get("published_at"),
+                like_count=v.get("like_count", 0),
+                comment_count=v.get("comment_count", 0),
             )
 
             db.upsert_video(v)
@@ -311,3 +315,167 @@ def get_all_trends():
     keywords = db.get_keywords(active_only=True)
     kw_list = [k["keyword"] for k in keywords]
     return tr_mod.get_trends_for_keywords(kw_list)
+
+
+# ── TikTok Trends ─────────────────────────────────────────────────────────────
+
+@app.get("/api/tiktok-trends")
+def get_tiktok_trends():
+    """Get cached TikTok trend data for all scanned keywords."""
+    return db.get_all_tiktok_trends()
+
+
+@app.get("/api/tiktok-trends/{keyword}")
+def get_tiktok_trend(keyword: str):
+    """Get TikTok trend data for a single keyword."""
+    cached = db.get_cached_tiktok_trend(keyword)
+    if cached:
+        return cached
+    result = tt.scan_niche_trends([keyword])
+    return result.get(keyword, {"keyword": keyword, "available": False})
+
+
+@app.post("/api/tiktok-trends/scan")
+async def scan_tiktok_trends(background_tasks: BackgroundTasks):
+    """Scan all active keywords for TikTok trends (background)."""
+    if _refresh_status["running"]:
+        return {"ok": False, "message": "A scan is already running"}
+    background_tasks.add_task(run_tiktok_scan)
+    return {"ok": True, "message": "TikTok trend scan started"}
+
+
+async def run_tiktok_scan():
+    _refresh_status["running"] = True
+    _refresh_status["progress"] = "Scanning TikTok trends..."
+    try:
+        keywords = db.get_keywords(active_only=True)
+        kw_list = [k["keyword"] for k in keywords]
+        total = len(kw_list)
+        for i, kw in enumerate(kw_list):
+            _refresh_status["progress"] = f"TikTok scan {i+1}/{total}: {kw}"
+            tt.scan_niche_trends([kw])
+        _refresh_status["progress"] = f"TikTok scan done — {total} keywords analyzed"
+        _refresh_status["last_done"] = datetime.utcnow().isoformat()
+    except Exception as e:
+        _refresh_status["progress"] = f"Error: {e}"
+        import traceback
+        traceback.print_exc()
+    finally:
+        _refresh_status["running"] = False
+
+
+# ── Tracked Channels ──────────────────────────────────────────────────────
+
+@app.get("/api/channels")
+def list_tracked_channels():
+    return db.get_tracked_channels()
+
+
+@app.post("/api/channels/track")
+def track_channel(body: TrackChannelRequest):
+    if not body.channel_id:
+        raise HTTPException(400, "channel_id required")
+    # Fetch fresh channel data if we don't have it
+    try:
+        ch_data = yt.get_channel_data(body.channel_id, body.channel_name)
+    except Exception:
+        ch_data = {"subscriber_count": 0, "avg_views": 0}
+    db.track_channel(
+        body.channel_id,
+        body.channel_name or ch_data.get("channel_name", ""),
+        ch_data.get("subscriber_count", 0),
+        ch_data.get("avg_views", 0),
+        body.why,
+    )
+    return {"ok": True}
+
+
+@app.delete("/api/channels/{channel_id}")
+def untrack_channel(channel_id: str):
+    db.untrack_channel(channel_id)
+    return {"ok": True}
+
+
+@app.get("/api/channels/{channel_id}/is-tracked")
+def check_tracked(channel_id: str):
+    return {"tracked": db.is_channel_tracked(channel_id)}
+
+
+@app.post("/api/channels/scan")
+async def scan_channels(background_tasks: BackgroundTasks):
+    """Scan all tracked channels for breakout videos."""
+    if _refresh_status["running"]:
+        return {"ok": False, "message": "Refresh already running"}
+    background_tasks.add_task(run_channel_scan)
+    return {"ok": True, "message": "Channel scan started"}
+
+
+async def run_channel_scan():
+    """Discover breakout videos from all tracked channels."""
+    _refresh_status["running"] = True
+    _refresh_status["progress"] = "Scanning tracked channels..."
+
+    try:
+        tracked = db.get_tracked_channels()
+        if not tracked:
+            _refresh_status["progress"] = "No tracked channels"
+            _refresh_status["running"] = False
+            return
+
+        total_breakouts = 0
+        total_videos = 0
+
+        for i, ch in enumerate(tracked):
+            channel_id = ch["channel_id"]
+            _refresh_status["progress"] = f"Scanning channel {i+1}/{len(tracked)}: {ch['channel_name']}"
+
+            # Fetch recent videos from this channel
+            recent = yt.fetch_channel_recent_videos(channel_id, max_results=30)
+            if not recent:
+                continue
+
+            # Get channel stats for scoring
+            ch_data = yt.get_channel_data(channel_id, ch["channel_name"])
+            sub_count = ch_data.get("subscriber_count", 0)
+            avg_views = ch_data.get("avg_views", 0)
+
+            # Fetch full details for these videos
+            video_ids = [v["video_id"] for v in recent]
+            videos = yt.fetch_video_details(video_ids)
+
+            for v in videos:
+                v["keywords_matched"] = [f"channel:{ch['channel_name']}"]
+
+                score_data = ol.compute_outlier_score(
+                    v["view_count"],
+                    sub_count,
+                    avg_views,
+                    published_at=v.get("published_at"),
+                    like_count=v.get("like_count", 0),
+                    comment_count=v.get("comment_count", 0),
+                )
+
+                db.upsert_video(v)
+                db.upsert_outlier_score(
+                    v["video_id"],
+                    score_data["view_to_sub_ratio"],
+                    score_data["view_to_average_ratio"],
+                    score_data["outlier_score"],
+                    score_data["is_breakout"],
+                )
+
+                total_videos += 1
+                if score_data["is_breakout"]:
+                    total_breakouts += 1
+
+            db.update_channel_scan_time(channel_id)
+
+        _refresh_status["progress"] = f"Channel scan done — {total_breakouts} breakouts from {total_videos} videos across {len(tracked)} channels"
+        _refresh_status["last_done"] = datetime.utcnow().isoformat()
+
+    except Exception as e:
+        _refresh_status["progress"] = f"Error: {e}"
+        import traceback
+        traceback.print_exc()
+    finally:
+        _refresh_status["running"] = False

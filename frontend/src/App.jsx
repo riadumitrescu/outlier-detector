@@ -5,6 +5,8 @@ import Dashboard from './pages/Dashboard'
 import VideoDetail from './pages/VideoDetail'
 import Keywords from './pages/Keywords'
 import Saved from './pages/Saved'
+import Channels from './pages/Channels'
+import Trends from './pages/Trends'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -27,6 +29,8 @@ export default function App() {
               <Route path="/video/:videoId" element={<VideoDetail />} />
               <Route path="/keywords" element={<Keywords />} />
               <Route path="/saved" element={<Saved />} />
+              <Route path="/channels" element={<Channels />} />
+              <Route path="/trends" element={<Trends />} />
             </Routes>
           </main>
         </div>
